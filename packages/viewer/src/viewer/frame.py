@@ -65,8 +65,9 @@ def azimuth_window_columns(start: int, end: int, width: int) -> np.ndarray:
     """Boolean mask (width,) of the columns (measurement ids) the sensor sends for
     ``azimuth_window`` [start, end] in millidegrees; start > end wraps through 0.
 
-    Applies to *staggered* arrays, whose column index is the measurement id."""
-    angle = np.arange(width) * 360_000 / width
+    Applies to *staggered* arrays, whose column index is the measurement id. The encoder
+    angle decreases with the measurement id: id 0 is at 0, id 1 just below 360000."""
+    angle = (width - np.arange(width)) % width * 360_000 / width
     if start <= end:
         return (angle >= start) & (angle <= end)
     return (angle >= start) | (angle <= end)

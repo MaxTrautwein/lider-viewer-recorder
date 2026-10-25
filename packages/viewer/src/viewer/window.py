@@ -57,6 +57,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.static_counts: tuple[int, int] | None = None  # static, all points in the view
         self.highlight_color = QtGui.QColor(255, 0, 255)
         self._model_cloud: tuple[tuple, np.ndarray, np.ndarray] | None = None  # cache
+        # ~/.config/lidar/viewer.ini: remembers the last opened folder.
+        self.settings = QtCore.QSettings(
+            QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, "lidar", "viewer"
+        )
 
         self.resize(1400, 900)
         self.setAcceptDrops(True)
@@ -64,8 +68,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._play_timer = QtCore.QTimer(self, timeout=self._on_tick)
         self._update_title()
         self._update_status()
-        if not path and cfg.recordings_dir and cfg.recordings_dir.is_dir():
-            path = cfg.recordings_dir
+        if not path:
+            last = self.settings.value("last_folder", "")
+            for folder in (Path(last) if last else None, cfg.recordings_dir):
+                if folder and folder.is_dir():
+                    path = folder
+                    break
         if path:
             opener = self.open_folder if Path(path).is_dir() else self.open
             QtCore.QTimer.singleShot(0, lambda: opener(path))
@@ -131,7 +139,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.browser.setColumnHidden(2, True)  # "Type"
         self.browser.setSortingEnabled(True)
         self.browser.sortByColumn(0, QtCore.Qt.AscendingOrder)
-        self.browser.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        # Name takes the remaining width, cut from the start, so size and date stay visible.
+        self.browser.setTextElideMode(QtCore.Qt.ElideLeft)
+        header = self.browser.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        for column in (1, 3):  # "Size", "Date Modified"
+            header.setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
         # currentChanged covers both mouse clicks and Up/Down in the list.
         self.browser.selectionModel().currentChanged.connect(self._on_browse)
 
@@ -427,6 +441,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def open_folder(self, path: str | Path) -> None:
         folder = Path(path).resolve()
         self.folder = folder
+        self.settings.setValue("last_folder", str(folder))
         self.browser.setRootIndex(self.fs_model.setRootPath(str(folder)))
         self.browser_dock.setWindowTitle(f"Recordings — {folder.name}")
         self.browser_dock.show()
@@ -526,7 +541,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         xyz = self.xyz_lut(rng).reshape(-1, 3)
         mask = shown.reshape(-1)
         flat = values.reshape(-1)[mask]
-        lo, hi = _levels(flat)
+        # Scaled over the whole frame: azimuth, max range and static mode hide points but do
+        # not change the colors of the others.
+        levels = _levels(values[rng > 0])
+        lo, hi = levels
         cmap = pg.colormap.get(self.cmap_box.currentText())
         norm = np.clip((flat - lo) / max(hi - lo, 1e-6), 0, 1)
         colors = cmap.map(norm, mode="float")
@@ -543,8 +561,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # the azimuth window.
         visible = _apply_static_mode(in_window, static, mode)
         image = destagger(info, np.where(visible, values, np.nan))
-        valid = destagger(info, np.where(visible, rng, 0)) > 0
-        self.image_item.setImage(image, levels=_levels(image[valid]))
+        self.image_item.setImage(image, levels=levels)
         self.image_item.setColorMap(cmap)
         self._draw_static_overlay(info, static, in_window, mode)
 

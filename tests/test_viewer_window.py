@@ -9,14 +9,16 @@ from ouster.sdk import osf
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pg_gl = pytest.importorskip("pyqtgraph.opengl")
-from PySide6 import QtWidgets  # noqa: E402
+from PySide6 import QtCore, QtWidgets  # noqa: E402
 
 from viewer import window  # noqa: E402
 from viewer.config import Config  # noqa: E402
 
 
 @pytest.fixture
-def app(monkeypatch):
+def app(monkeypatch, tmp_path):
+    # Keep the remembered last folder out of the user's real settings.
+    QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, str(tmp_path))
     # Offscreen platforms have no usable OpenGL; the tests check data, not pixels.
     monkeypatch.setattr(pg_gl.GLViewWidget, "initializeGL", lambda self: None)
     monkeypatch.setattr(pg_gl.GLViewWidget, "paintGL", lambda self, *a, **k: None)
@@ -73,4 +75,16 @@ def test_static_model_workflow(app, recording, tmp_path, monkeypatch):
     win2 = window.ViewerWindow(cfg)
     win2.open(recording)  # auto-loads the sensor's model
     assert win2.model_path == win.model_path and win2.model.frames == 6
+    win2.close()
+
+
+def test_reopens_last_folder(app, recording):
+    cfg = Config(UTC, None, None)
+    win = window.ViewerWindow(cfg)
+    win.open_folder(recording.parent)
+    win.close()
+
+    win2 = window.ViewerWindow(cfg)
+    app.processEvents()  # the folder is opened from a zero-delay timer
+    assert win2.folder == recording.parent.resolve()
     win2.close()

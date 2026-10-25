@@ -14,9 +14,11 @@ def test_azimuth_window_columns():
         return np.flatnonzero(azimuth_window_columns(start, end, 1024)).tolist()
 
     assert cols(0, 360_000) == list(range(1024))
-    assert cols(0, 180_000) == list(range(513))
+    # column_window (1, 489) the firmware sent for this azimuth_window (OS-1, 1024x10)
+    assert cols(188_000, 360_000) == list(range(1, 490))
+    assert cols(0, 180_000) == [0] + list(range(512, 1024))
     assert cols(270_000, 90_000) == list(range(257)) + list(range(768, 1024))
-    assert cols(90_000, 90_000) == [256]
+    assert cols(90_000, 90_000) == [768]
 
 
 def test_wall_clock_falls_back_to_host_time():

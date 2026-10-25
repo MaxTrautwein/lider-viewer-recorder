@@ -95,7 +95,8 @@ required, so a typo or a key missing after an update is reported instead of sile
   allowed duration range, `start` / `standby_after` defaults, `static` model and tolerances.
   Command line options override it.
 - **viewer:** `timezone` of the displayed timestamp (`UTC` or e.g. `Europe/Berlin`),
-  `recordings_dir` (start folder of the Open dialogs, opened when no path is given),
+  `recordings_dir` (start folder of the Open dialogs, opened when no path is given and no folder
+  was opened before),
   `static_model` (model file pattern, see [Static model](#static-model)).
 
 After an update that adds keys (e.g. `static` / `static_model`), copy them from the template
@@ -144,8 +145,9 @@ viewer               # then File › Open (Ctrl+O) or drop an .osf file on the w
 In a clone, use `uv run viewer …`, or `uvx --from …` without one (see [Setup](#setup)).
 
 The window opens maximized. A folder (also via File › Open folder, Ctrl+Shift+O, or by dropping it on the window) opens
-the **Recordings** panel, which lists its `.osf` files. Click one, or move with ↑ / ↓, to load
-it. View › Recordings shows or hides the panel.
+the **Recordings** panel, which lists its `.osf` files with size and date. Click one, or move with
+↑ / ↓, to load it. View › Recordings shows or hides the panel. The last opened folder is
+remembered (`~/.config/lidar/viewer.ini`) and reopened when the viewer starts without a path.
 
 | Control | Action |
 |---|---|
@@ -155,9 +157,9 @@ it. View › Recordings shows or hides the panel.
 | slider | jump to a frame |
 | speed, Loop | playback speed 0.25×–4×, loop at the end |
 | mouse | left-drag rotates, wheel zooms, middle-drag or Ctrl+left-drag pans |
-| Color / Map | channel field and colormap (scaled to the 1st–99th percentile) |
+| Color / Map | channel field and colormap (scaled to the 1st–99th percentile of the whole frame, so Azimuth, Max range and static display modes do not change the colors) |
 | Max range | hide points farther away (helps indoors) |
-| Azimuth, Full | simulate the sensor's `azimuth_window` [start, end] in millidegrees (0…360000, start > end wraps through 0): points outside are hidden, so the two values can go straight into the sensor config. Edges may differ by one column from the firmware's own `column_window`. Full resets to 0…360000 |
+| Azimuth, Full | simulate the sensor's `azimuth_window` [start, end] in millidegrees (0…360000, start > end wraps through 0): points outside are hidden, so the two values can go straight into the sensor config. Full resets to 0…360000 |
 | Edit › Copy frame timestamp (Ctrl+Shift+C), Copy | frame time in the configured `timezone` as a Postgres `timestamptz`, e.g. `2026-10-21 14:20:42.800342+00:00` |
 | File › Save frame as PLY (Ctrl+S) | current frame as `.ply` (xyz + all fields) for CloudCompare/MeshLab; honors Hide / Only static |
 | Model menu, View › Static model | build, enhance, open and save a [static model](#static-model), display mode and tolerances |

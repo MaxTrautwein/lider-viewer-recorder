@@ -11,7 +11,9 @@
 timezone: UTC
 
 # Folder of recordings: start folder of the Open dialogs, and opened in the Recordings panel
-# when the viewer starts without a path. null: none. Relative: to the current directory.
+# when the viewer starts without a path and no folder was opened before (the last opened
+# folder is remembered in viewer.ini next to this file's user location). null: none.
+# Relative: to the current directory.
 recordings_dir: null
 
 # Static model file (Model menu): opened automatically for a recording of the matching sensor
