@@ -1,0 +1,24 @@
+[project]
+name = "recorder"
+version = "0.1.0"
+description = "Headless OSF recorder for Ouster lidar sensors"
+authors = [
+    { name = "Max Trautwein", email = "46843360+MaxTrautwein@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "ouster-sdk>=1.0.1",
+    "pyyaml>=6.0.3",
+    "staticmodel",
+]
+
+[project.scripts]
+recorder = "recorder.cli:main"
+
+[tool.uv.sources]
+staticmodel = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"

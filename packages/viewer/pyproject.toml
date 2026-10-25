@@ -1,0 +1,28 @@
+[project]
+name = "viewer"
+version = "0.1.0"
+description = "Point cloud viewer for Ouster OSF recordings"
+authors = [
+    { name = "Max Trautwein", email = "46843360+MaxTrautwein@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "ouster-sdk>=1.0.1",
+    "pyopengl>=3.1.10",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.12.0",
+    "pyyaml>=6.0.3",
+    "staticmodel",
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.scripts]
+viewer = "viewer.cli:main"
+
+[tool.uv.sources]
+staticmodel = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"

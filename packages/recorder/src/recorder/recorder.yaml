@@ -1,0 +1,39 @@
+# Recorder configuration template.
+#
+# The recorder reads recorder-local.yaml, searched in this order:
+#   1. --config PATH
+#   2. ./recorder-local.yaml
+#   3. $XDG_CONFIG_HOME/lidar/recorder-local.yaml (default ~/.config/lidar/)
+# Create it from this template with `recorder config init` (or `--user` for 3.).
+# All keys are required. Command line options override the values here.
+
+sensor:
+  host: ""                    # REQUIRED: sensor hostname or IP, e.g. os-992000000000.local
+  http_timeout_s: 10          # timeout of the sensor's HTTP API
+
+udp:
+  port: null                  # local UDP port for lidar data; null: the sensor's udp_port_lidar
+  bind: 0.0.0.0               # local address to receive on
+  receive_buffer_bytes: 16777216
+  no_data_timeout_s: 5        # give up (exit code 2) when no lidar packets arrive for this long
+
+recording:
+  out_dir: recordings         # directory for auto-named files (relative: to the current directory)
+  # Auto file name. Placeholders: {serial}, {frames}, {time} (local time, strftime format).
+  filename: "{serial}_{time:%Y%m%d_%H%M%S}_{frames}f.osf"
+  min_duration_s: 1           # allowed range of --duration
+  max_duration_s: 60
+  start: false                # switch the sensor to NORMAL if it is in STANDBY (--start)
+  standby_after: false        # back to STANDBY afterwards if `start` switched it on (--standby-after)
+
+# Static model: drop points that match the background of a fixed sensor (they are stored as
+# "no return"), which makes recordings much smaller. Build the model in the viewer
+# (Model > New from recording) and copy it here. Command line: --static-model / --no-static-model.
+static:
+  model: null                 # model file; {serial} is the sensor's serial number, e.g.
+                              # "models/{serial}_static.npz". null: keep all points
+  abs_tolerance_m: 0.2        # a point is static if its range is within this distance ...
+  rel_tolerance: 0.01         # ... or this fraction of the range (whichever is larger) of
+  min_fraction: 0.3           # a background range seen in at least this fraction of frames
+  drop_no_return: true        # also clear the near-IR/signal values of pixels without a return
+                              # (no point, but ~half the remaining data; loses the ambient image)

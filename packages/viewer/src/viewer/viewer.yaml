@@ -1,0 +1,21 @@
+# Viewer configuration template.
+#
+# The viewer reads viewer-local.yaml, searched in this order:
+#   1. --config PATH
+#   2. ./viewer-local.yaml
+#   3. $XDG_CONFIG_HOME/lidar/viewer-local.yaml (default ~/.config/lidar/)
+# Create it from this template with `viewer config init` (or `--user` for 3.).
+# All keys are required.
+
+# Time zone of the displayed / copied frame timestamp: UTC or an IANA name, e.g. Europe/Berlin.
+timezone: UTC
+
+# Folder of recordings: start folder of the Open dialogs, and opened in the Recordings panel
+# when the viewer starts without a path. null: none. Relative: to the current directory.
+recordings_dir: null
+
+# Static model file (Model menu): opened automatically for a recording of the matching sensor
+# and the default location of Model > Save. {serial} is the sensor's serial number, so each
+# sensor has its own model, e.g. "models/{serial}_static.npz". null: none. Relative: to the
+# current directory.
+static_model: null

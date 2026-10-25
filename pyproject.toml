@@ -1,0 +1,30 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+recorder = { workspace = true }
+viewer = { workspace = true }
+staticmodel = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "recorder",
+    "viewer",
+    "staticmodel",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["recorder", "viewer", "staticmodel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
