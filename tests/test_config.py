@@ -28,10 +28,11 @@ def test_recorder_template_loads():
     cfg = recorder_config.parse(recorder_config.template_text())
     assert cfg.sensor.host == ""
     assert cfg.udp.port is None
-    assert cfg.udp.no_data_timeout_s == 5.0
+    assert cfg.udp.no_data_timeout_s == 120.0
     assert cfg.recording.out_dir == Path("recordings")
     assert (cfg.recording.min_duration_s, cfg.recording.max_duration_s) == (1.0, 60.0)
-    assert cfg.recording.start is False
+    assert cfg.recording.start is True
+    assert cfg.recording.standby_after is True
     assert cfg.static.model is None
     assert cfg.static.min_fraction == 0.3
 

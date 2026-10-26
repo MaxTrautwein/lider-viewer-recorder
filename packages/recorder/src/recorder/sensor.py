@@ -1,7 +1,8 @@
 """Thin helpers around the sensor's HTTP API.
 
 Everything here is read-only except :func:`set_operating_mode`, which is only
-called on explicit user request (``--start`` / ``sensor start|stop``).
+called to switch the operating mode (``recording.start`` / ``standby_after``,
+``sensor start|stop``).
 """
 
 import json

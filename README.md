@@ -23,8 +23,9 @@ OSF is Ouster's standard format: one compressed file (~0.3–1.5 MB per frame) w
 sensor metadata embedded and a frame index. `ouster-cli` and Ouster Studio open it too.
 
 The recorder never changes the sensor configuration. The only exception is the
-operating mode, and only when you ask for it (`--start`, `--standby-after`,
-`sensor start|stop`).
+operating mode: by default it wakes a sensor in STANDBY for a recording and puts it back
+afterwards (`recording.start` / `recording.standby_after`, off with `--no-start` /
+`--no-standby-after`), and `sensor start|stop` switches it by hand.
 
 ## Setup
 
@@ -113,7 +114,7 @@ recorder record --frames 1          # a single frame
 recorder record -n 50               # 50 frames
 recorder record --duration 30s      # within recording.min/max_duration_s (also: 5, 1500ms, 1m)
 recorder record -d 10s -o lab.osf   # explicit file name
-recorder record -d 5s --start --standby-after   # wake the sensor, sleep it afterwards
+recorder record -d 5s --no-standby-after   # leave the sensor running afterwards
 ```
 
 - Default file name: `recording.out_dir` / `recording.filename`, by default
@@ -122,8 +123,8 @@ recorder record -d 5s --start --standby-after   # wake the sensor, sleep it afte
 - A recording starts with the next complete revolution.
 - While recording, the file is named `*.osf.part`, so a file with the final name is always
   complete. Ctrl+C stops early and keeps the frames recorded so far.
-- If no data arrives within `udp.no_data_timeout_s` (sensor in STANDBY, or `udp_dest` is another
-  host), it exits with code 2 and prints the sensor status.
+- If no data arrives within `udp.no_data_timeout_s` (sensor in STANDBY with `--no-start`, or
+  `udp_dest` is another host), it exits with code 2 and prints the sensor status.
 
 `--sensor HOST` selects another sensor than `sensor.host`.
 

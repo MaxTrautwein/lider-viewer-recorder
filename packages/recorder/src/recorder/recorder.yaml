@@ -15,7 +15,8 @@ udp:
   port: null                  # local UDP port for lidar data; null: the sensor's udp_port_lidar
   bind: 0.0.0.0               # local address to receive on
   receive_buffer_bytes: 16777216
-  no_data_timeout_s: 5        # give up (exit code 2) when no lidar packets arrive for this long
+  no_data_timeout_s: 120      # give up (exit code 2) when no lidar packets arrive for this long
+                              # (also covers the spin-up of a sensor woken from STANDBY)
 
 recording:
   out_dir: recordings         # directory for auto-named files (relative: to the current directory)
@@ -23,8 +24,9 @@ recording:
   filename: "{serial}_{time:%Y%m%d_%H%M%S}_{frames}f.osf"
   min_duration_s: 1           # allowed range of --duration
   max_duration_s: 60
-  start: false                # switch the sensor to NORMAL if it is in STANDBY (--start)
-  standby_after: false        # back to STANDBY afterwards if `start` switched it on (--standby-after)
+  start: true                 # switch the sensor to NORMAL if it is in STANDBY (--[no-]start)
+  standby_after: true         # back to STANDBY afterwards if `start` switched it on
+                              # (--[no-]standby-after)
 
 # Static model: drop points that match the background of a fixed sensor (they are stored as
 # "no return"), which makes recordings much smaller. Build the model in the viewer
