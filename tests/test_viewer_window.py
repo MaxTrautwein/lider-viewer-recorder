@@ -88,3 +88,21 @@ def test_reopens_last_folder(app, recording):
     app.processEvents()  # the folder is opened from a zero-delay timer
     assert win2.folder == recording.parent.resolve()
     win2.close()
+
+
+def test_azimuth_wraps(app):
+    win = window.ViewerWindow(Config(UTC, None, None))
+    start, end = win.az_start_box, win.az_end_box
+    start.setValue(0)
+    start.stepBy(-1)
+    assert start.value() == 359_000
+    start.setValue(500)
+    start.stepBy(-1)
+    assert start.value() == 359_500
+    end.setValue(360_000)
+    end.stepBy(1)
+    assert end.value() == 1000
+    end.setValue(359_000)
+    end.stepBy(1)
+    assert end.value() == 360_000
+    win.close()

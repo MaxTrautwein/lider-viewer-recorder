@@ -1,6 +1,8 @@
 """Qt viewer for OSF recordings: 3D point cloud, 2D field image and playback controls."""
 
 import copy
+import logging
+import signal
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +40,26 @@ SHOW_ALL, HIDE_STATIC, ONLY_STATIC, HIGHLIGHT_STATIC, DIM_STATIC = (
 STATIC_MODES = (SHOW_ALL, HIDE_STATIC, ONLY_STATIC, HIGHLIGHT_STATIC, DIM_STATIC)
 DIM_FACTOR = 0.3  # brightness of dimmed static points
 MODEL_LAYER_COLOR = (0.35, 0.55, 1.0, 1.0)
+
+log = logging.getLogger(__name__)
+
+
+class _AzimuthSpinBox(QtWidgets.QSpinBox):
+    """Spin box whose arrow / wheel steps wrap around the circle: 0 - 1000 gives 359000,
+    360000 + 1000 gives 1000. Exactly 360000 stays reachable for the full window."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.setWrapping(True)  # keeps stepping enabled at the limits
+
+    def stepBy(self, steps: int) -> None:  # noqa: N802 (Qt API)
+        v = self.value() + steps * self.singleStep()
+        span = self.maximum() - self.minimum()
+        if v > self.maximum():
+            v -= span
+        elif v < self.minimum():
+            v += span
+        self.setValue(v)
 
 
 class ViewerWindow(QtWidgets.QMainWindow):
@@ -316,7 +338,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # Simulates the sensor's azimuth_window: only columns inside [start, end] are kept.
         tb.addWidget(QtWidgets.QLabel(" Azimuth: "))
         self.az_start_box, self.az_end_box = (
-            QtWidgets.QSpinBox(
+            _AzimuthSpinBox(
                 minimum=FULL_AZIMUTH[0],
                 maximum=FULL_AZIMUTH[1],
                 singleStep=1000,
@@ -952,4 +974,17 @@ def run(path: str | None, cfg: Config) -> int:
     pg.setConfigOptions(antialias=False)
     win = ViewerWindow(cfg, path)
     win.showMaximized()
+
+    # Ctrl+C in the console closes the window (asking about an unsaved model as usual);
+    # a second Ctrl+C kills the process.
+    def on_sigint(*_) -> None:
+        log.info("Ctrl+C: closing viewer (press again to force quit)")
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        win.close()
+
+    signal.signal(signal.SIGINT, on_sigint)
+    # Python only runs signal handlers between bytecodes; wake it up from the Qt loop.
+    wake = QtCore.QTimer(win, interval=200)
+    wake.timeout.connect(lambda: None)
+    wake.start()
     return app.exec()
