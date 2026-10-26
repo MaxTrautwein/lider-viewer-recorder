@@ -5,18 +5,24 @@ called on explicit user request (``--start`` / ``sensor start|stop``).
 """
 
 import json
+import math
 import socket
 
 from ouster.sdk import core, sensor
 
 
+def _http(host: str, timeout_s: float) -> sensor.SensorHttp:
+    # the SDK binding only accepts whole seconds
+    return sensor.SensorHttp.create(host, max(1, math.ceil(timeout_s)))
+
+
 def fetch_metadata(host: str, timeout_s: float) -> str:
     """Return the sensor metadata JSON (calibration, data format, config)."""
-    return sensor.SensorHttp.create(host, timeout_s).metadata()
+    return _http(host, timeout_s).metadata()
 
 
 def fetch_config(host: str, timeout_s: float) -> dict:
-    http = sensor.SensorHttp.create(host, timeout_s)
+    http = _http(host, timeout_s)
     return json.loads(http.get_config_params(active=True))
 
 
