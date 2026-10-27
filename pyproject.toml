@@ -4,7 +4,6 @@ members = ["packages/*"]
 [tool.uv.sources]
 recorder = { workspace = true }
 viewer = { workspace = true }
-staticmodel = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -12,7 +11,6 @@ dev = [
     "ruff>=0.17.1",
     "recorder",
     "viewer",
-    "staticmodel",
 ]
 
 [tool.ruff]
@@ -23,7 +21,7 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["recorder", "viewer", "staticmodel"]
+known-first-party = ["recorder", "viewer"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

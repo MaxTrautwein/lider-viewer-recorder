@@ -27,15 +27,3 @@ recording:
   start: true                 # switch the sensor to NORMAL if it is in STANDBY (--[no-]start)
   standby_after: true         # back to STANDBY afterwards if `start` switched it on
                               # (--[no-]standby-after)
-
-# Static model: drop points that match the background of a fixed sensor (they are stored as
-# "no return"), which makes recordings much smaller. Build the model in the viewer
-# (Model > New from recording) and copy it here. Command line: --static-model / --no-static-model.
-static:
-  model: null                 # model file; {serial} is the sensor's serial number, e.g.
-                              # "models/{serial}_static.npz". null: keep all points
-  abs_tolerance_m: 0.2        # a point is static if its range is within this distance ...
-  rel_tolerance: 0.01         # ... or this fraction of the range (whichever is larger) of
-  min_fraction: 0.3           # a background range seen in at least this fraction of frames
-  drop_no_return: true        # also clear the near-IR/signal values of pixels without a return
-                              # (no point, but ~half the remaining data; loses the ambient image)

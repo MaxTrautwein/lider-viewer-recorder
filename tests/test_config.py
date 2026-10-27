@@ -1,4 +1,3 @@
-import argparse
 from datetime import UTC
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,15 +32,12 @@ def test_recorder_template_loads():
     assert (cfg.recording.min_duration_s, cfg.recording.max_duration_s) == (1.0, 60.0)
     assert cfg.recording.start is True
     assert cfg.recording.standby_after is True
-    assert cfg.static.model is None
-    assert cfg.static.min_fraction == 0.3
 
 
 def test_viewer_template_loads():
     cfg = viewer_config.parse(viewer_config.template_text())
     assert cfg.timezone is UTC
     assert cfg.recordings_dir is None
-    assert cfg.static_model is None
 
 
 @pytest.mark.parametrize(
@@ -55,10 +51,7 @@ def test_viewer_template_loads():
         (lambda d: d.update(sensor=None), "sensor: expected a mapping"),
         (lambda d: d["recording"].update(filename="{sn}.osf"), "recording.filename"),
         (lambda d: d["recording"].update(min_duration_s=90), "min_duration_s <= max"),
-        (lambda d: d["static"].pop("min_fraction"), "missing key static.min_fraction"),
-        (lambda d: d["static"].update(model="{sn}.npz"), "static.model: invalid pattern"),
-        (lambda d: d["static"].update(min_fraction=1.5), "static.min_fraction"),
-        (lambda d: d["static"].update(abs_tolerance_m=-1), "tolerances must be >= 0"),
+        (lambda d: d.update(static={"model": None}), "unknown key static"),  # removed key
     ],
 )
 def test_recorder_rejects(change, message):
@@ -75,15 +68,13 @@ def test_recorder_accepts_int_for_float():
 
 
 def test_viewer_timezone():
-    cfg = viewer_config.parse(
-        "timezone: Europe/Berlin\nrecordings_dir: ~/rec\nstatic_model: m/{serial}.npz\n"
-    )
+    cfg = viewer_config.parse("timezone: Europe/Berlin\nrecordings_dir: ~/rec\n")
     assert cfg.timezone == ZoneInfo("Europe/Berlin")
     assert cfg.recordings_dir == Path("~/rec").expanduser()
     with pytest.raises(viewer_config.ConfigError, match="unknown time zone"):
-        viewer_config.parse("timezone: Mars/Olympus\nrecordings_dir: null\nstatic_model: null\n")
-    with pytest.raises(viewer_config.ConfigError, match="static_model: invalid pattern"):
-        viewer_config.parse("timezone: UTC\nrecordings_dir: null\nstatic_model: '{sn}'\n")
+        viewer_config.parse("timezone: Mars/Olympus\nrecordings_dir: null\n")
+    with pytest.raises(viewer_config.ConfigError, match="unknown key static_model"):  # removed
+        viewer_config.parse("timezone: UTC\nrecordings_dir: null\nstatic_model: null\n")
 
 
 @pytest.mark.parametrize("cfg", CONFIGS)
@@ -130,29 +121,3 @@ def test_recorder_cli_requires_host(capsys):
     with pytest.raises(SystemExit):
         recorder_cli.main(["record", "-n", "1"])
     assert "sensor.host" in capsys.readouterr().err
-
-
-def test_recorder_static_model_path(tmp_path):
-    from fake_sensor import load_info
-
-    from staticmodel import StaticModel
-
-    _, info = load_info()
-    cfg = recorder_config.parse(recorder_config.template_text()).static
-    args = argparse.Namespace(static_model=None, no_static_model=False)
-    assert recorder_cli._load_static(args, cfg, info) is None
-
-    args.static_model = str(tmp_path / "{serial}.npz")
-    with pytest.raises(ValueError, match=f"{info.sn}.npz not found"):
-        recorder_cli._load_static(args, cfg, info)
-    StaticModel(str(info.sn + 1), info.prod_line, (128, 1024)).save(tmp_path / f"{info.sn}.npz")
-    with pytest.raises(ValueError, match="S/N"):
-        recorder_cli._load_static(args, cfg, info)
-    StaticModel.new(info).save(tmp_path / f"{info.sn}.npz")
-    static = recorder_cli._load_static(args, cfg, info)
-    assert static.model.serial == str(info.sn)
-    assert static.params.min_fraction == cfg.min_fraction
-    assert static.drop_no_return is cfg.drop_no_return
-
-    args.no_static_model = True
-    assert recorder_cli._load_static(args, cfg, info) is None

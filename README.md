@@ -9,10 +9,6 @@ Record and view data from Ouster lidar sensors (developed with an OS-0-128). A
 - **`viewer`** (`packages/viewer`) opens such a file anywhere: 3D point cloud plus 2D image,
   colored by range, reflectivity, signal or near-IR, with playback and frame-by-frame stepping.
 
-Both use **`staticmodel`** (`packages/staticmodel`, numpy + ouster-sdk only): a
-[static model](#static-model) of a fixed sensor's background, built in the viewer, used to
-hide/highlight static points there and to drop them while recording.
-
 ```
 sensor ──UDP──▶ udp_dest host: recorder record -d 10s ──▶ recordings/*.osf
                                                                │ scp / rsync
@@ -93,15 +89,15 @@ required, so a typo or a key missing after an update is reported instead of sile
 
 - **recorder:** `sensor.host` (required, the template leaves it empty), HTTP timeout, UDP
   port / bind address / receive buffer / no-data timeout, output directory, file name pattern,
-  allowed duration range, `start` / `standby_after` defaults, `static` model and tolerances.
+  allowed duration range, `start` / `standby_after` defaults.
   Command line options override it.
 - **viewer:** `timezone` of the displayed timestamp (`UTC` or e.g. `Europe/Berlin`),
   `recordings_dir` (start folder of the Open dialogs, opened when no path is given and no folder
-  was opened before),
-  `static_model` (model file pattern, see [Static model](#static-model)).
+  was opened before).
 
-After an update that adds keys (e.g. `static` / `static_model`), copy them from the template
-into your `*-local.yaml`; the error message names the missing key.
+After an update that adds keys, copy them from the template into your `*-local.yaml`; the error
+message names the missing key. Keys that were removed are reported the same way (e.g.
+`unknown key static` after the static model was dropped): delete them from your file.
 
 ## Recording (on the udp_dest host)
 
@@ -128,12 +124,6 @@ recorder record -d 5s --no-standby-after   # leave the sensor running afterwards
 
 `--sensor HOST` selects another sensor than `sensor.host`.
 
-With a [static model](#static-model) (`static.model` or `--static-model PATH`), points that
-match the background are stored as "no return", and with `static.drop_no_return` (default) the
-near-IR/signal values of pixels without a return are cleared too. The file stays a normal OSF
-that only contains the moving points; the summary prints the share of points dropped. A missing
-model file or a model of another sensor is an error; `--no-static-model` records everything.
-
 ## Viewing
 
 ```sh
@@ -158,45 +148,13 @@ remembered (`~/.config/lidar/viewer.ini`) and reopened when the viewer starts wi
 | slider | jump to a frame |
 | speed, Loop | playback speed 0.25×–4×, loop at the end |
 | mouse | left-drag rotates, wheel zooms, middle-drag or Ctrl+left-drag pans |
-| Color / Map | channel field and colormap (scaled to the 1st–99th percentile of the whole frame, so Azimuth, Max range and static display modes do not change the colors) |
+| Color / Map | channel field and colormap (scaled to the 1st–99th percentile of the whole frame, so Azimuth and Max range do not change the colors) |
 | Max range | hide points farther away (helps indoors) |
 | Azimuth, Full | simulate the sensor's `azimuth_window` [start, end] in millidegrees (0…360000, start > end wraps through 0): points outside are hidden, so the two values can go straight into the sensor config. Full resets to 0…360000 |
 | Edit › Copy frame timestamp (Ctrl+Shift+C), Copy | frame time in the configured `timezone` as a Postgres `timestamptz`, e.g. `2026-10-21 14:20:42.800342+00:00` |
-| File › Save frame as PLY (Ctrl+S) | current frame as `.ply` (xyz + all fields) for CloudCompare/MeshLab; honors Hide / Only static |
-| Model menu, View › Static model | build, enhance, open and save a [static model](#static-model), display mode and tolerances |
-
-## Static model
-
-The sensor is mounted in a fixed place, so most of every frame is the same background. A static
-model stores, for every pixel (beam × column), up to three ranges seen there (e.g. a door open
-and closed) and how often each was seen. A point is **static** if its range is within the
-tolerance (`max(0.2 m, 1 % of the range)` by default) of a range seen in at least 30 % of the
-model's frames. Each model belongs to one sensor (serial number and resolution); one file is
-about 0.5–2 MB.
-
-In the viewer (Model menu, or the Static model panel):
-
-1. Open a recording, preferably with little movement, and choose **New from recording…**. Pick
-   the frame range to use (default: all).
-2. Open more recordings and choose **Add recording…** to enhance the model (more scenes,
-   lighting, doors open/closed). Repeat any time later after reopening the model.
-3. **Save** it. With `static_model: "models/{serial}_static.npz"` in `viewer-local.yaml` each
-   sensor gets its own file, which is the default save location and is opened automatically
-   for recordings of that sensor.
-
-| Display | |
-|---|---|
-| Show all | no change (the status bar still shows the static share) |
-| Hide static | only moving points |
-| Only static | only background points (check what the model covers) |
-| Highlight static | static points in the highlight color |
-| Dim static | static points darkened |
-| Show model | draws the model's background surface as its own (blue) layer |
-
-Tolerance, "or %" and Min. seen change the decision live; use the same values in the recorder's
-`static:` section. To drop static points while recording, copy the model to the recording host
-and set `static.model` in `recorder-local.yaml` (also with `{serial}`). Measured on an indoor
-recording: 85–90 % of the points static, 77 MB → 18 MB.
+| File › Save frame as PLY (Ctrl+S) | current frame as `.ply` (xyz + all fields) for CloudCompare/MeshLab |
+| File › Export frame as PNG (Ctrl+E) | current frame as `<name>_2d.png` (the 2D image at the sensor's resolution, e.g. 1024 × 128, however far it is zoomed; transparent outside the azimuth window) and / or `<name>_3d.png` (the 3D view as shown, with or without the grid) |
+| View › Show grid | show or hide the ground grid of the 3D view (remembered) |
 
 ## Development
 
@@ -207,6 +165,5 @@ uv run pytest            # uses a synthetic fake sensor, no hardware needed
 ```
 
 Tests live in the root `tests/`: `test_recorder.py`, `test_viewer.py`, `test_config.py`,
-`test_staticmodel.py`, `test_viewer_window.py` (static model workflow, offscreen Qt), and
-`test_pipeline.py` (records with the recorder, with and without a static model, reads back with
-the viewer).
+`test_viewer_window.py` (viewer window, offscreen Qt), and `test_pipeline.py` (records with
+the recorder, reads back with the viewer).

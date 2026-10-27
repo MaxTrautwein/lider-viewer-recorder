@@ -11,12 +11,12 @@ from recorder.receiver import NoDataError
 from recorder.record import default_path, frames_for_duration, parse_duration, record
 
 
-def record_in_thread(receiver, n_frames, path, static=None):
+def record_in_thread(receiver, n_frames, path):
     result = {}
 
     def run():
         try:
-            result["value"] = record(receiver, n_frames, path, static=static)
+            result["value"] = record(receiver, n_frames, path)
         except Exception as e:
             result["error"] = e
 

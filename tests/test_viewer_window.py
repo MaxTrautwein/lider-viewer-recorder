@@ -1,4 +1,4 @@
-"""Static model workflow in the viewer window (offscreen Qt, OpenGL drawing stubbed out)."""
+"""Viewer window (offscreen Qt, OpenGL drawing stubbed out)."""
 
 import os
 from datetime import UTC
@@ -9,7 +9,7 @@ from ouster.sdk import osf
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pg_gl = pytest.importorskip("pyqtgraph.opengl")
-from PySide6 import QtCore, QtWidgets  # noqa: E402
+from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 from viewer import window  # noqa: E402
 from viewer.config import Config  # noqa: E402
@@ -40,46 +40,50 @@ def recording(tmp_path):
     return path
 
 
-def test_static_model_workflow(app, recording, tmp_path, monkeypatch):
-    cfg = Config(UTC, None, str(tmp_path / "models" / "{serial}.npz"))
-    win = window.ViewerWindow(cfg)
+def test_export_png(app, recording, tmp_path, monkeypatch):
+    win = window.ViewerWindow(Config(UTC, None))
     win.open(recording)
-    assert win.model is None and not win.add_model_action.isEnabled()
+    win.az_start_box.setValue(0)
+    win.az_end_box.setValue(90_000)  # a quarter of the columns
+    grid_while_grabbing = []
 
-    monkeypatch.setattr(window, "_ask_frame_range", lambda parent, n, title: (0, 3))
-    win._on_build_model(new=True)
-    assert win.model.frames == 4 and win.model_dirty
+    def grab():
+        grid_while_grabbing.append(win.grid.visible())
+        return QtGui.QImage(64, 48, QtGui.QImage.Format_RGB32)
 
-    win.seek(5)  # obstacle frame
-    counts = {}
-    for mode in window.STATIC_MODES:
-        win.static_mode_box.setCurrentText(mode)
-        counts[mode] = win.n_points
-    total = counts[window.SHOW_ALL]
-    assert counts[window.HIDE_STATIC] + counts[window.ONLY_STATIC] == total
-    assert 0 < counts[window.HIDE_STATIC] < total / 10  # only the obstacle is left
-    assert counts[window.HIGHLIGHT_STATIC] == counts[window.DIM_STATIC] == total
-    win.show_model_box.setChecked(True)
-    assert win.model_scatter.visible()
+    monkeypatch.setattr(win.view3d, "grabFramebuffer", grab)
+    monkeypatch.setattr(window, "_ask_export", lambda parent, grid: (True, True, False))
+    name = tmp_path / "out.png"
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", lambda *a, **k: (str(name), ""))
+    win._on_export()
 
-    monkeypatch.setattr(window, "_ask_frame_range", lambda parent, n, title: (4, 5))
-    win._on_build_model(new=False)
-    assert win.model.frames == 6 and len(win.model.sources) == 2
-
-    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", lambda *a, **k: (str(a[2]), ""))
-    assert win._on_save_model() and not win.model_dirty
     _, info = load_info()
-    assert win.model_path == tmp_path / "models" / f"{info.sn}.npz"
+    fmt = info.format
+    image = QtGui.QImage(str(tmp_path / "out_2d.png"))
+    assert (image.width(), image.height()) == (fmt.columns_per_frame, fmt.pixels_per_column)
+    alpha = [image.pixelColor(x, 0).alpha() for x in range(image.width())]
+    assert 0 < alpha.count(255) < image.width() / 2  # transparent outside the window
+    assert set(alpha) == {0, 255}
+    assert QtGui.QImage(str(tmp_path / "out_3d.png")).width() == 64
+    assert grid_while_grabbing == [False]  # "Include grid" off
+    assert win.grid.visible()  # restored to the View toggle
     win.close()
 
-    win2 = window.ViewerWindow(cfg)
-    win2.open(recording)  # auto-loads the sensor's model
-    assert win2.model_path == win.model_path and win2.model.frames == 6
+
+def test_grid_toggle_is_remembered(app):
+    win = window.ViewerWindow(Config(UTC, None))
+    assert win.grid.visible()
+    win.grid_action.setChecked(False)
+    assert not win.grid.visible()
+    win.close()
+
+    win2 = window.ViewerWindow(Config(UTC, None))
+    assert not win2.grid_action.isChecked() and not win2.grid.visible()
     win2.close()
 
 
 def test_reopens_last_folder(app, recording):
-    cfg = Config(UTC, None, None)
+    cfg = Config(UTC, None)
     win = window.ViewerWindow(cfg)
     win.open_folder(recording.parent)
     win.close()
@@ -91,7 +95,7 @@ def test_reopens_last_folder(app, recording):
 
 
 def test_azimuth_wraps(app):
-    win = window.ViewerWindow(Config(UTC, None, None))
+    win = window.ViewerWindow(Config(UTC, None))
     start, end = win.az_start_box, win.az_end_box
     start.setValue(0)
     start.stepBy(-1)

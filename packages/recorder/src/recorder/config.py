@@ -44,20 +44,10 @@ class RecordingConfig:
 
 
 @dataclass(frozen=True)
-class StaticConfig:
-    model: str | None  # path pattern with {serial}
-    abs_tolerance_m: float
-    rel_tolerance: float
-    min_fraction: float
-    drop_no_return: bool
-
-
-@dataclass(frozen=True)
 class Config:
     sensor: SensorConfig
     udp: UdpConfig
     recording: RecordingConfig
-    static: StaticConfig
 
 
 def template_text() -> str:
@@ -129,18 +119,6 @@ def _validate(cfg: Config) -> None:
         ) from None
     if not 0 < rec.min_duration_s <= rec.max_duration_s:
         raise ConfigError("recording: need 0 < min_duration_s <= max_duration_s")
-    static = cfg.static
-    if static.model is not None:
-        try:
-            static.model.format(serial="0")
-        except (KeyError, IndexError, ValueError) as e:
-            raise ConfigError(
-                f"static.model: invalid pattern {static.model!r} ({e!r}); placeholder is {{serial}}"
-            ) from None
-    if static.abs_tolerance_m < 0 or static.rel_tolerance < 0:
-        raise ConfigError("static: tolerances must be >= 0")
-    if not 0 <= static.min_fraction <= 1:
-        raise ConfigError("static.min_fraction: must be between 0 and 1")
 
 
 def _build(cls: type, data: object, where: str):

@@ -15,9 +15,3 @@ timezone: UTC
 # folder is remembered in viewer.ini next to this file's user location). null: none.
 # Relative: to the current directory.
 recordings_dir: null
-
-# Static model file (Model menu): opened automatically for a recording of the matching sensor
-# and the default location of Model > Save. {serial} is the sensor's serial number, so each
-# sensor has its own model, e.g. "models/{serial}_static.npz". null: none. Relative: to the
-# current directory.
-static_model: null

@@ -47,15 +47,6 @@ def main(argv: list[str] | None = None) -> int:
         help="put the sensor back to STANDBY afterwards if --start switched it on "
         "(default: recording.standby_after)",
     )
-    static = p.add_mutually_exclusive_group()
-    static.add_argument(
-        "--static-model",
-        metavar="PATH",
-        help="drop points matching this static model; {serial} is replaced (default: static.model)",
-    )
-    static.add_argument(
-        "--no-static-model", action="store_true", help="keep all points, ignore static.model"
-    )
 
     p = sub.add_parser("sensor", parents=[common], help="show sensor info or start/stop it")
     p.add_argument("action", choices=["info", "start", "stop"])
@@ -134,11 +125,6 @@ def _record(
         bind=cfg.udp.bind,
         receive_buffer_bytes=cfg.udp.receive_buffer_bytes,
     )
-    try:
-        static = _load_static(args, cfg.static, receiver.info)
-    except (OSError, ValueError) as e:
-        print(f"error: static model: {e}", file=sys.stderr)
-        return 1
     fps = receiver.info.format.fps or 10
     n_frames = args.frames if seconds is None else frames_for_duration(seconds, fps)
     path = args.output or default_path(
@@ -150,7 +136,7 @@ def _record(
     )  # fmt: skip
 
     try:
-        result = record(receiver, n_frames, path, cfg.udp.no_data_timeout_s, static)
+        result = record(receiver, n_frames, path, cfg.udp.no_data_timeout_s)
     except NoDataError as e:
         print(f"error: {e}\n\n{sensor_api.describe(host, timeout)}", file=sys.stderr)
         return 2
@@ -165,31 +151,9 @@ def _record(
         + (f" ({result.incomplete_frames} incomplete)" if result.incomplete_frames else "")
         + f"\n  duration: {result.seconds:.2f} s\n"
         f"  size: {result.size_bytes / 1e6:.1f} MB"
-        + (
-            f"\n  static points dropped: {result.static_fraction:.1%}"
-            if result.static_fraction is not None
-            else ""
-        )
         + ("\n  (interrupted)" if result.interrupted else "")
     )
     return 130 if result.interrupted else 0
-
-
-def _load_static(args: argparse.Namespace, cfg: config.StaticConfig, info):
-    """The StaticFilter to record with, or None to keep all points."""
-    pattern = None if args.no_static_model else args.static_model or cfg.model
-    if pattern is None:
-        return None
-    from staticmodel import StaticFilter, StaticModel, StaticParams, model_path
-
-    path = model_path(pattern, info.sn)
-    if not path.is_file():
-        raise ValueError(f"{path} not found (--no-static-model records all points)")
-    model = StaticModel.load(path)
-    model.check(info)
-    log.info("static model %s (%d frames): dropping static points", path, model.frames)
-    params = StaticParams(cfg.abs_tolerance_m, cfg.rel_tolerance, cfg.min_fraction)
-    return StaticFilter(model, params, cfg.drop_no_return)
 
 
 if __name__ == "__main__":

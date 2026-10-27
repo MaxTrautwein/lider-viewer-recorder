@@ -24,7 +24,6 @@ class ConfigError(Exception):
 class Config:
     timezone: tzinfo
     recordings_dir: Path | None
-    static_model: str | None  # path pattern with {serial}
 
 
 def template_text() -> str:
@@ -69,7 +68,6 @@ def parse(text: str, source: str = "<string>") -> Config:
         raise ConfigError(f"{source}: invalid YAML: {e}") from None
     try:
         cfg = _build(Config, data, "")
-        _validate(cfg)
     except ConfigError as e:
         raise ConfigError(f"{source}: {e}") from None
     return cfg
@@ -83,17 +81,6 @@ def init(user: bool = False, force: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(template_text(), encoding="utf-8")
     return path
-
-
-def _validate(cfg: Config) -> None:
-    if cfg.static_model is not None:
-        try:
-            cfg.static_model.format(serial="0")
-        except (KeyError, IndexError, ValueError) as e:
-            raise ConfigError(
-                f"static_model: invalid pattern {cfg.static_model!r} ({e!r}); "
-                "placeholder is {serial}"
-            ) from None
 
 
 def _build(cls: type, data: object, where: str):

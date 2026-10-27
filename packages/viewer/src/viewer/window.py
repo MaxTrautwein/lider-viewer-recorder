@@ -1,6 +1,5 @@
 """Qt viewer for OSF recordings: 3D point cloud, 2D field image and playback controls."""
 
-import copy
 import logging
 import signal
 from pathlib import Path
@@ -10,8 +9,6 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from ouster.sdk import core
 from PySide6 import QtCore, QtGui, QtWidgets
-
-from staticmodel import StaticModel, StaticParams, model_path
 
 from .config import Config
 from .frame import (
@@ -28,19 +25,7 @@ COLORMAPS = ("turbo", "viridis", "magma", "CET-L1")
 SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0)
 FULL_AZIMUTH = (0, 360_000)  # sensor azimuth_window range, millidegrees
 FILE_FILTER = "Ouster recordings (*.osf)"
-MODEL_FILTER = "Static model (*.npz)"
-# Static model display modes.
-SHOW_ALL, HIDE_STATIC, ONLY_STATIC, HIGHLIGHT_STATIC, DIM_STATIC = (
-    "Show all",
-    "Hide static",
-    "Only static",
-    "Highlight static",
-    "Dim static",
-)
-STATIC_MODES = (SHOW_ALL, HIDE_STATIC, ONLY_STATIC, HIGHLIGHT_STATIC, DIM_STATIC)
-DIM_FACTOR = 0.3  # brightness of dimmed static points
-MODEL_LAYER_COLOR = (0.35, 0.55, 1.0, 1.0)
-
+PNG_FILTER = "PNG image (*.png)"
 log = logging.getLogger(__name__)
 
 
@@ -73,13 +58,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.index = 0
         self.n_points = 0
         self.window_columns = (0, 0)  # columns inside the azimuth window, total columns
-        self.model: StaticModel | None = None
-        self.model_path: Path | None = None
-        self.model_dirty = False  # changed since loaded / saved
-        self.static_counts: tuple[int, int] | None = None  # static, all points in the view
-        self.highlight_color = QtGui.QColor(255, 0, 255)
-        self._model_cloud: tuple[tuple, np.ndarray, np.ndarray] | None = None  # cache
-        # ~/.config/lidar/viewer.ini: remembers the last opened folder.
+        # ~/.config/lidar/viewer.ini: remembers the last opened folder and the grid toggle.
         self.settings = QtCore.QSettings(
             QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, "lidar", "viewer"
         )
@@ -106,15 +85,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.view3d = gl.GLViewWidget()
         self.view3d.setBackgroundColor("k")
         self._reset_view()
-        grid = gl.GLGridItem()
-        grid.setSize(40, 40)
-        grid.setSpacing(1, 1)
-        grid.setColor((255, 255, 255, 40))
-        self.view3d.addItem(grid)
+        self.grid = gl.GLGridItem()
+        self.grid.setSize(40, 40)
+        self.grid.setSpacing(1, 1)
+        self.grid.setColor((255, 255, 255, 40))
+        self.view3d.addItem(self.grid)
         self.view3d.addItem(gl.GLAxisItem(size=QtGui.QVector3D(1, 1, 1)))
-        self.model_scatter = gl.GLScatterPlotItem(pxMode=True)  # the static model's surface
-        self.model_scatter.setGLOptions("opaque")
-        self.view3d.addItem(self.model_scatter)
         self.scatter = gl.GLScatterPlotItem(pxMode=True)
         self.scatter.setGLOptions("opaque")
         self.view3d.addItem(self.scatter)
@@ -126,8 +102,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.image_plot.invertY(True)
         self.image_item = pg.ImageItem(axisOrder="row-major")
         self.image_plot.addItem(self.image_item)
-        self.static_overlay = pg.ImageItem(axisOrder="row-major")  # highlight / dim static
-        self.image_plot.addItem(self.static_overlay)
         self.image_plot.setMouseEnabled(x=True, y=False)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -143,8 +117,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         self._build_browser()
-        self._build_model_actions()
-        self._build_model_dock()
         self._build_menu()
         self._build_display_toolbar()
 
@@ -177,106 +149,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, self.browser_dock)
         self.browser_dock.hide()
 
-    def _build_model_actions(self) -> None:
-        def action(text: str, slot, tip: str, key=None) -> QtGui.QAction:
-            a = QtGui.QAction(text, self, toolTip=tip, statusTip=tip)
-            if key is not None:
-                a.setShortcut(key)
-            a.triggered.connect(slot)
-            return a
-
-        self.new_model_action = action(
-            "&New from recording…",
-            lambda: self._on_build_model(new=True),
-            "Build a new static model from frames of the current recording",
-        )
-        self.add_model_action = action(
-            "&Add recording…",
-            lambda: self._on_build_model(new=False),
-            "Enhance the static model with frames of the current recording",
-        )
-        self.open_model_action = action(
-            "&Open…", self._on_open_model, "Open a static model", QtGui.QKeySequence("Ctrl+M")
-        )
-        self.save_model_action = action(
-            "&Save", lambda: self._on_save_model(), "Save the static model"
-        )
-        self.save_model_as_action = action(
-            "Save &as…", lambda: self._on_save_model(ask=True), "Save the static model as"
-        )
-        self.close_model_action = action("&Close", self._on_close_model, "Close the static model")
-        self.model_actions = [
-            self.new_model_action,
-            self.add_model_action,
-            self.open_model_action,
-            self.save_model_action,
-            self.save_model_as_action,
-            self.close_model_action,
-        ]
-
-    def _build_model_dock(self) -> None:
-        """Dock with the static model: file actions, display mode and tolerances."""
-        panel = QtWidgets.QWidget()
-        form = QtWidgets.QFormLayout(panel)
-
-        self.model_label = QtWidgets.QLabel(wordWrap=True)
-        self.model_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        form.addRow(self.model_label)
-
-        buttons = QtWidgets.QGridLayout()
-        for i, action in enumerate(self.model_actions):
-            b = QtWidgets.QToolButton()
-            b.setDefaultAction(action)
-            b.setText(action.text().replace("&", "").rstrip("…").replace(" from recording", ""))
-            b.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            buttons.addWidget(b, i // 2, i % 2)
-        form.addRow(buttons)
-
-        self.static_mode_box = QtWidgets.QComboBox()
-        self.static_mode_box.addItems(STATIC_MODES)
-        self.static_mode_box.currentTextChanged.connect(self._on_static_changed)
-        form.addRow("Display:", self.static_mode_box)
-
-        self.highlight_btn = QtWidgets.QPushButton(toolTip="Color of highlighted static points")
-        self.highlight_btn.clicked.connect(self._on_pick_highlight)
-        self.highlight_btn.setEnabled(False)  # only in "Highlight static" mode
-        self._update_highlight_btn()
-        form.addRow("Highlight:", self.highlight_btn)
-
-        defaults = StaticParams()
-        self.tol_m_box = QtWidgets.QDoubleSpinBox(
-            minimum=0, maximum=5, singleStep=0.05, decimals=2, suffix=" m",
-            value=defaults.abs_tolerance_m,
-            toolTip="A point is static if its range is within this distance of the background",
-        )  # fmt: skip
-        self.tol_pct_box = QtWidgets.QDoubleSpinBox(
-            minimum=0, maximum=20, singleStep=0.5, decimals=1, suffix=" %",
-            value=defaults.rel_tolerance * 100,
-            toolTip="... or within this fraction of the range, whichever is larger",
-        )  # fmt: skip
-        self.min_seen_box = QtWidgets.QSpinBox(
-            minimum=1, maximum=100, suffix=" %", value=round(defaults.min_fraction * 100),
-            toolTip="A background range must be seen in at least this share of the model's frames",
-        )  # fmt: skip
-        form.addRow("Tolerance:", self.tol_m_box)
-        form.addRow("or:", self.tol_pct_box)
-        form.addRow("Min. seen:", self.min_seen_box)
-        for box in (self.tol_m_box, self.tol_pct_box, self.min_seen_box):
-            box.valueChanged.connect(self._on_static_changed)
-
-        self.show_model_box = QtWidgets.QCheckBox(
-            "Show model", toolTip="Draw the model's background surface as its own layer"
-        )
-        self.show_model_box.toggled.connect(self._on_static_changed)
-        form.addRow(self.show_model_box)
-
-        self.model_dock = QtWidgets.QDockWidget("Static model", self)
-        self.model_dock.setObjectName("static_model")
-        self.model_dock.setWidget(panel)
-        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.model_dock)
-        self.model_dock.hide()
-        self._update_model_ui()
-
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Open…", QtGui.QKeySequence.Open, self._on_open)
@@ -286,6 +158,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.save_action = file_menu.addAction(
             "&Save frame as PLY…", QtGui.QKeySequence.Save, self._on_save
         )
+        self.export_action = file_menu.addAction(
+            "&Export frame as PNG…", QtGui.QKeySequence("Ctrl+E"), self._on_export
+        )
         file_menu.addSeparator()
         file_menu.addAction("&Quit", QtGui.QKeySequence.Quit, self.close)
 
@@ -294,16 +169,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "Copy frame &timestamp", QtGui.QKeySequence("Ctrl+Shift+C"), self._on_copy_timestamp
         )
 
-        model_menu = self.menuBar().addMenu("&Model")
-        for action in self.model_actions[:2]:
-            model_menu.addAction(action)
-        model_menu.addSeparator()
-        for action in self.model_actions[2:]:
-            model_menu.addAction(action)
-
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.browser_dock.toggleViewAction())
-        view_menu.addAction(self.model_dock.toggleViewAction())
+        self.grid_action = view_menu.addAction("Show &grid")
+        self.grid_action.setCheckable(True)
+        self.grid_action.setChecked(self.settings.value("show_grid", True, type=bool))
+        self.grid_action.toggled.connect(self._on_grid_toggled)
+        self.grid.setVisible(self.grid_action.isChecked())
 
     def _build_display_toolbar(self) -> None:
         tb = self.addToolBar("Display")
@@ -426,6 +298,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._redraw()
         self._update_status()
 
+    def _on_grid_toggled(self, checked: bool) -> None:
+        self.grid.setVisible(checked)
+        self.settings.setValue("show_grid", checked)
+
     def _reset_view(self) -> None:
         self.view3d.setCameraPosition(
             pos=QtGui.QVector3D(0, 0, 0), distance=30, elevation=30, azimuth=-135
@@ -454,9 +330,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.slider.setValue(0)
         self.slider.blockSignals(False)
         self._update_timer()
-        self._model_cloud = None  # new XYZ table
-        self._update_model_ui()
-        self._auto_load_model()
         self._show_index(0)
         self._select_in_browser()
 
@@ -537,272 +410,59 @@ class ViewerWindow(QtWidgets.QMainWindow):
         frame = self.frame
         if frame is None or self.recording is None:
             return
-        name = self.field_box.currentText()
-        if name not in frame.fields:
-            name = "RANGE"
-        values = frame.fields[name].astype(np.float32)
+        values = self._field_values()
+        image, levels, cmap = self._field_image(values)
         rng = frame.range
 
-        cols = azimuth_window_columns(
-            self.az_start_box.value(), self.az_end_box.value(), rng.shape[1]
-        )
-        in_window = np.broadcast_to(cols, rng.shape)
-        self.window_columns = (int(cols.sum()), cols.size)
+        in_window = self._in_window()
         max_range = self.max_range_box.value()
         in_view = in_window & (rng > 0)
         if max_range > 0:
             in_view &= rng < max_range * 1000
 
-        static = self._static_mask(rng)
-        mode = self.static_mode_box.currentText()
-        shown = _apply_static_mode(in_view, static, mode)
-        self.static_counts = None
-        if static is not None:
-            self.static_counts = (int((static & in_view).sum()), int(in_view.sum()))
-
         xyz = self.xyz_lut(rng).reshape(-1, 3)
-        mask = shown.reshape(-1)
+        mask = in_view.reshape(-1)
         flat = values.reshape(-1)[mask]
-        # Scaled over the whole frame: azimuth, max range and static mode hide points but do
-        # not change the colors of the others.
-        levels = _levels(values[rng > 0])
-        lo, hi = levels
-        cmap = pg.colormap.get(self.cmap_box.currentText())
-        norm = np.clip((flat - lo) / max(hi - lo, 1e-6), 0, 1)
-        colors = cmap.map(norm, mode="float")
-        if static is not None and mode == HIGHLIGHT_STATIC:
-            colors[static.reshape(-1)[mask]] = self.highlight_color.getRgbF()
-        elif static is not None and mode == DIM_STATIC:
-            colors[static.reshape(-1)[mask], :3] *= DIM_FACTOR
+        colors = cmap.map(_normalize(flat, levels), mode="float")
         self.scatter.setData(pos=xyz[mask], color=colors, size=self.size_box.value())
         self.n_points = int(mask.sum())
-        self._draw_model_layer(in_window, max_range)
-
-        info = self.recording.info
-        # Pixels hidden by the static mode are drawn transparent (NaN) like those outside
-        # the azimuth window.
-        visible = _apply_static_mode(in_window, static, mode)
-        image = destagger(info, np.where(visible, values, np.nan))
         self.image_item.setImage(image, levels=levels)
         self.image_item.setColorMap(cmap)
-        self._draw_static_overlay(info, static, in_window, mode)
 
-    def _draw_static_overlay(
-        self, info: core.SensorInfo, static: np.ndarray | None, in_window: np.ndarray, mode: str
-    ) -> None:
-        """Tint (highlight) or darken (dim) the static pixels of the 2D image."""
-        if static is None or mode not in (HIGHLIGHT_STATIC, DIM_STATIC):
-            self.static_overlay.hide()
-            return
-        if mode == HIGHLIGHT_STATIC:
-            rgba = self.highlight_color.getRgb()[:3] + (255,)
-        else:
-            rgba = (0, 0, 0, round(255 * (1 - DIM_FACTOR)))
-        overlay = np.zeros((*static.shape, 4), np.uint8)
-        overlay[destagger(info, (static & in_window).astype(np.uint8)).astype(bool)] = rgba
-        self.static_overlay.setImage(overlay, levels=(0, 255))
-        self.static_overlay.show()
+    def _field_values(self) -> np.ndarray:
+        """The selected field of the current frame (staggered, float)."""
+        name = self.field_box.currentText()
+        if name not in self.frame.fields:
+            name = "RANGE"
+        return self.frame.fields[name].astype(np.float32)
 
-    def _draw_model_layer(self, in_window: np.ndarray, max_range: float) -> None:
-        """The model's background surface as its own point layer (cached per model state)."""
-        if not self.show_model_box.isChecked() or not self._model_active():
-            self.model_scatter.setVisible(False)
-            return
-        params = self._static_params()
-        key = (id(self.model), self.model.frames, params)
-        if self._model_cloud is None or self._model_cloud[0] != key:
-            bg = self.model.background_range(params)
-            self._model_cloud = (key, self.xyz_lut(bg).reshape(-1, 3), bg.reshape(-1))
-        _, xyz, bg = self._model_cloud
-        mask = (bg > 0) & in_window.reshape(-1)
-        if max_range > 0:
-            mask &= bg < max_range * 1000
-        self.model_scatter.setData(
-            pos=xyz[mask], color=MODEL_LAYER_COLOR, size=self.size_box.value()
+    def _in_window(self) -> np.ndarray:
+        """Staggered mask of the pixels inside the azimuth window."""
+        rng = self.frame.range
+        cols = azimuth_window_columns(
+            self.az_start_box.value(), self.az_end_box.value(), rng.shape[1]
         )
-        self.model_scatter.setVisible(True)
+        self.window_columns = (int(cols.sum()), cols.size)
+        return np.broadcast_to(cols, rng.shape)
 
-    # ---- static model ------------------------------------------------------------
+    def _field_image(
+        self, values: np.ndarray
+    ) -> tuple[np.ndarray, tuple[float, float], pg.ColorMap]:
+        """The 2D image of ``values`` as drawn: destaggered, NaN (transparent) outside the
+        azimuth window, with its color levels and colormap. The levels are scaled over the
+        whole frame, so azimuth and max range hide points but do not change the colors of
+        the others (also in 3D)."""
+        levels = _levels(values[self.frame.range > 0])
+        image = destagger(self.recording.info, np.where(self._in_window(), values, np.nan))
+        return image, levels, pg.colormap.get(self.cmap_box.currentText())
 
-    def _model_active(self) -> bool:
-        """A model is loaded and fits the current recording's sensor."""
-        return (
-            self.model is not None
-            and self.recording is not None
-            and self.model.mismatch(self.recording.info) is None
-        )
-
-    def _static_params(self) -> StaticParams:
-        return StaticParams(
-            abs_tolerance_m=self.tol_m_box.value(),
-            rel_tolerance=self.tol_pct_box.value() / 100,
-            min_fraction=self.min_seen_box.value() / 100,
-        )
-
-    def _static_mask(self, rng: np.ndarray) -> np.ndarray | None:
-        if not self._model_active():
-            return None
-        return self.model.static_mask(rng, self._static_params())
-
-    def _on_static_changed(self) -> None:
-        self.highlight_btn.setEnabled(self.static_mode_box.currentText() == HIGHLIGHT_STATIC)
-        self._redraw()
-        self._update_status()
-
-    def _on_pick_highlight(self) -> None:
-        color = QtWidgets.QColorDialog.getColor(self.highlight_color, self, "Highlight color")
-        if color.isValid():
-            self.highlight_color = color
-            self._update_highlight_btn()
-            self._redraw()
-
-    def _update_highlight_btn(self) -> None:
-        self.highlight_btn.setStyleSheet(f"background-color: {self.highlight_color.name()}")
-
-    def _set_model(self, model: StaticModel | None, path: Path | None, dirty: bool) -> None:
-        self.model, self.model_path, self.model_dirty = model, path, dirty
-        self._model_cloud = None
-        self._update_model_ui()
-        self._redraw()
-        self._update_status()
-
-    def _update_model_ui(self) -> None:
-        model, rec = self.model, self.recording
-        has_model = model is not None
-        self.new_model_action.setEnabled(rec is not None)
-        self.add_model_action.setEnabled(has_model and self._model_active())
-        for action in (self.save_model_action, self.save_model_as_action, self.close_model_action):
-            action.setEnabled(has_model)
-        if model is None:
-            self.model_label.setText(
-                "No static model. Build one from the current recording (New) or open one."
-            )
-            return
-        name = self.model_path.name if self.model_path else "unsaved"
-        recordings = len({s["recording"] for s in model.sources})
-        text = (
-            f"<b>{name}{' *' if self.model_dirty else ''}</b><br>"
-            f"{model.prod_line} S/N {model.serial}, {model.shape[0]} x {model.shape[1]}<br>"
-            f"{model.frames} frames from {recordings} recording(s)"
-        )
-        if rec is not None and (reason := model.mismatch(rec.info)):
-            text += f"<br><span style='color:#e55'>Not used: {reason}</span>"
-        self.model_label.setText(text)
-        self.model_label.setToolTip(
-            "\n".join(
-                f"{s['recording']}: frames {s['first'] + 1}–{s['last'] + 1} ({s['added']})"
-                for s in model.sources
-            )
-        )
-
-    def _confirm_discard_model(self) -> bool:
-        """True if there are no unsaved model changes, or the user saved / discarded them."""
-        if self.model is None or not self.model_dirty:
-            return True
-        answer = QtWidgets.QMessageBox.question(
-            self,
-            "Unsaved static model",
-            "The static model has unsaved changes. Save them?",
-            QtWidgets.QMessageBox.Save
-            | QtWidgets.QMessageBox.Discard
-            | QtWidgets.QMessageBox.Cancel,
-        )
-        if answer == QtWidgets.QMessageBox.Save:
-            return self._on_save_model()
-        return answer == QtWidgets.QMessageBox.Discard
-
-    def _on_build_model(self, new: bool) -> None:
-        rec = self.recording
-        if rec is None or (new and not self._confirm_discard_model()):
-            return
-        if not new and (self.model is None or not self._model_active()):
-            return
-        frames = _ask_frame_range(self, len(rec), "New static model" if new else "Add recording")
-        if frames is None:
-            return
-        first, last = frames
-        self.pause()
-        # "Add" works on a copy, so cancelling leaves the model unchanged.
-        model = StaticModel.new(rec.info) if new else copy.deepcopy(self.model)
-        progress = QtWidgets.QProgressDialog(
-            f"Adding frames of {rec.path.name}…", "Cancel", 0, last - first + 1, self
-        )
-        progress.setWindowTitle("Static model")
-        progress.setWindowModality(QtCore.Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        for n, i in enumerate(range(first, last + 1)):
-            progress.setValue(n)
-            if progress.wasCanceled():
-                return
-            model.update(rec.frame(i).range)
-        progress.setValue(last - first + 1)
-        model.add_source(rec.path.name, last - first + 1, first, last)
-        self._set_model(model, None if new else self.model_path, dirty=True)
-        self.model_dock.show()
-        self.statusBar().showMessage(f"Added {last - first + 1} frames to the static model", 5000)
-
-    def _default_model_path(self) -> Path:
-        serial = self.model.serial if self.model else ""
-        if self.cfg.static_model:
-            return model_path(self.cfg.static_model, serial)
-        return Path(self._start_dir()) / f"{serial}_static.npz"
-
-    def _on_save_model(self, ask: bool = False) -> bool:
-        if self.model is None:
-            return False
-        path = self.model_path
-        if ask or path is None:
-            name, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Save static model", str(path or self._default_model_path()), MODEL_FILTER
-            )
-            if not name:
-                return False
-            path = Path(name)
+    def _grab_3d(self, include_grid: bool) -> QtGui.QImage:
+        """The 3D view as shown (at the widget's size), with or without the grid."""
+        self.grid.setVisible(include_grid)
         try:
-            self.model.save(path)
-        except OSError as e:
-            QtWidgets.QMessageBox.critical(self, "Cannot save static model", f"{path}\n\n{e}")
-            return False
-        self._set_model(self.model, path, dirty=False)
-        self.statusBar().showMessage(f"Saved {path}", 5000)
-        return True
-
-    def _on_open_model(self) -> None:
-        if not self._confirm_discard_model():
-            return
-        start = self.model_path or self._default_model_path()
-        name, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open static model", str(start.parent), MODEL_FILTER
-        )
-        if name:
-            self.load_model(name)
-
-    def load_model(self, path: str | Path, quiet: bool = False) -> bool:
-        try:
-            model = StaticModel.load(path)
-        except (OSError, ValueError) as e:
-            if not quiet:
-                QtWidgets.QMessageBox.critical(self, "Cannot open static model", f"{path}\n\n{e}")
-            return False
-        self._set_model(model, Path(path), dirty=False)
-        self.model_dock.show()
-        self.statusBar().showMessage(f"Static model {path}", 5000)
-        return True
-
-    def _on_close_model(self) -> None:
-        if self._confirm_discard_model():
-            self._set_model(None, None, dirty=False)
-
-    def _auto_load_model(self) -> None:
-        """Open the configured model of the recording's sensor, unless a fitting or unsaved
-        model is already loaded."""
-        if self.cfg.static_model is None or self.recording is None:
-            return
-        if self.model is not None and (self._model_active() or self.model_dirty):
-            return
-        path = model_path(self.cfg.static_model, self.recording.info.sn)
-        if path.is_file():
-            self.load_model(path, quiet=True)
+            return self.view3d.grabFramebuffer()
+        finally:
+            self.grid.setVisible(self.grid_action.isChecked())
 
     def _update_title(self) -> None:
         name = self.recording.path.name if self.recording else "no recording"
@@ -817,9 +477,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
             )
             self.timestamp_edit.clear()
             self.save_action.setEnabled(False)
+            self.export_action.setEnabled(False)
             self.copy_ts_action.setEnabled(False)
             return
         self.save_action.setEnabled(True)
+        self.export_action.setEnabled(True)
         ts = self.frame.wall_clock_ns
         self.timestamp_edit.setText(format_timestamptz(ts, self.cfg.timezone) if ts else "")
         self.copy_ts_action.setEnabled(bool(ts))
@@ -829,16 +491,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         )
         self.status_label.setText(
             f"{rec.path.name}   |   {rec.info.prod_line} S/N {rec.info.sn}   |   "
-            f"frame id {self.frame.frame_id}   |   {self.n_points:,} points"
-            + self._window_status()
-            + self._static_status()
+            f"frame id {self.frame.frame_id}   |   {self.n_points:,} points" + self._window_status()
         )
-
-    def _static_status(self) -> str:
-        if self.static_counts is None:
-            return ""
-        n, total = self.static_counts
-        return f"   |   static {n / max(total, 1):.1%}"
 
     def _window_status(self) -> str:
         n, width = self.window_columns
@@ -874,24 +528,48 @@ class ViewerWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.clipboard().setText(text)
         self.statusBar().showMessage(f"Copied {text}", 3000)
 
+    def _default_frame_path(self, suffix: str) -> Path:
+        rec = self.recording
+        return rec.path.with_name(f"{rec.path.stem}_frame{self.index + 1:04d}{suffix}")
+
     def _on_save(self) -> None:
         if self.frame is None or self.recording is None:
             return
-        default = self.recording.path.with_name(
-            f"{self.recording.path.stem}_frame{self.index + 1:04d}.ply"
-        )
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save frame", str(default), "Point cloud (*.ply)"
+            self, "Save frame", str(self._default_frame_path(".ply")), "Point cloud (*.ply)"
         )
         if not path:
             return
-        rng = self.frame.range
-        static = self._static_mask(rng)
-        mask = _apply_static_mode(rng > 0, static, self.static_mode_box.currentText()).reshape(-1)
-        xyz = self.xyz_lut(rng).reshape(-1, 3)[mask]
+        mask = (self.frame.range > 0).reshape(-1)
+        xyz = self.xyz_lut(self.frame.range).reshape(-1, 3)[mask]
         fields = {k: v.reshape(-1)[mask] for k, v in self.frame.fields.items()}
         write_ply(path, xyz, fields)
         self.statusBar().showMessage(f"Saved {path}", 5000)
+
+    def _on_export(self) -> None:
+        if self.frame is None or self.recording is None:
+            return
+        choice = _ask_export(self, self.grid_action.isChecked())
+        if choice is None:
+            return
+        want_2d, want_3d, include_grid = choice
+        name, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export frame", str(self._default_frame_path(".png")), PNG_FILTER
+        )
+        if not name:
+            return
+        base = Path(name).with_suffix("")
+        images = []
+        if want_2d:
+            image, levels, cmap = self._field_image(self._field_values())
+            images.append((base.with_name(base.name + "_2d.png"), _rgba_image(image, levels, cmap)))
+        if want_3d:
+            images.append((base.with_name(base.name + "_3d.png"), self._grab_3d(include_grid)))
+        for path, image in images:
+            if not image.save(str(path), "PNG"):
+                QtWidgets.QMessageBox.critical(self, "Cannot export frame", f"{path}")
+                return
+        self.statusBar().showMessage("Exported " + ", ".join(str(p) for p, _ in images), 5000)
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # noqa: N802 (Qt API)
         if _dropped_path(event.mimeData()):
@@ -907,9 +585,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.open(path)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802 (Qt API)
-        if not self._confirm_discard_model():
-            event.ignore()
-            return
         self.pause()
         if self.recording is not None:
             self.recording.close()
@@ -927,38 +602,45 @@ def _dropped_path(mime: QtCore.QMimeData) -> Path | None:
     return None
 
 
-def _apply_static_mode(mask: np.ndarray, static: np.ndarray | None, mode: str) -> np.ndarray:
-    """``mask`` without the pixels the static display mode hides."""
-    if static is None or mode == SHOW_ALL:
-        return mask
-    if mode == HIDE_STATIC:
-        return mask & ~static
-    if mode == ONLY_STATIC:
-        return mask & static
-    return mask  # highlight / dim: shown, but colored differently
-
-
-def _ask_frame_range(parent: QtWidgets.QWidget, n: int, title: str) -> tuple[int, int] | None:
-    """Ask for frames first..last (shown 1-based) of a recording with ``n`` frames;
-    returns 0-based indices or None if cancelled."""
-    dialog = QtWidgets.QDialog(parent, windowTitle=title)
+def _ask_export(parent: QtWidgets.QWidget, grid: bool) -> tuple[bool, bool, bool] | None:
+    """Ask which images to export; returns (2D image, 3D view, include grid) or None if
+    cancelled."""
+    dialog = QtWidgets.QDialog(parent, windowTitle="Export frame as PNG")
     form = QtWidgets.QFormLayout(dialog)
-    form.addRow(QtWidgets.QLabel("Use these frames of the current recording:"))
-    first = QtWidgets.QSpinBox(minimum=1, maximum=n, value=1)
-    last = QtWidgets.QSpinBox(minimum=1, maximum=n, value=n)
-    first.valueChanged.connect(lambda v: last.setValue(max(v, last.value())))
-    last.valueChanged.connect(lambda v: first.setValue(min(v, first.value())))
-    form.addRow("First:", first)
-    form.addRow("Last:", last)
+    image_2d = QtWidgets.QCheckBox("2D image (full sensor resolution)", checked=True)
+    view_3d = QtWidgets.QCheckBox("3D view (as shown)", checked=True)
+    include_grid = QtWidgets.QCheckBox("Include grid", checked=grid)
+    view_3d.toggled.connect(include_grid.setEnabled)
+    for box in (image_2d, view_3d, include_grid):
+        form.addRow(box)
     buttons = QtWidgets.QDialogButtonBox(
         QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
     )
+    ok = buttons.button(QtWidgets.QDialogButtonBox.Ok)
+    for box in (image_2d, view_3d):
+        box.toggled.connect(lambda: ok.setEnabled(image_2d.isChecked() or view_3d.isChecked()))
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     form.addRow(buttons)
     if dialog.exec() != QtWidgets.QDialog.Accepted:
         return None
-    return first.value() - 1, last.value() - 1
+    return image_2d.isChecked(), view_3d.isChecked(), include_grid.isChecked()
+
+
+def _normalize(values: np.ndarray, levels: tuple[float, float]) -> np.ndarray:
+    lo, hi = levels
+    return np.clip((values - lo) / max(hi - lo, 1e-6), 0, 1)
+
+
+def _rgba_image(image: np.ndarray, levels: tuple[float, float], cmap: pg.ColorMap) -> QtGui.QImage:
+    """``image`` (H x W, NaN = no data) colored like the 2D view, NaN transparent."""
+    nan = np.isnan(image)
+    rgba = cmap.map(_normalize(np.nan_to_num(image), levels).reshape(-1), mode="byte")
+    rgba = np.ascontiguousarray(rgba.reshape(*image.shape, 4), np.uint8)
+    rgba[nan, 3] = 0
+    h, w = image.shape
+    # copy(): the QImage must not keep pointing into the numpy buffer.
+    return QtGui.QImage(rgba.data, w, h, 4 * w, QtGui.QImage.Format_RGBA8888).copy()
 
 
 def _levels(values: np.ndarray) -> tuple[float, float]:
@@ -975,8 +657,7 @@ def run(path: str | None, cfg: Config) -> int:
     win = ViewerWindow(cfg, path)
     win.showMaximized()
 
-    # Ctrl+C in the console closes the window (asking about an unsaved model as usual);
-    # a second Ctrl+C kills the process.
+    # Ctrl+C in the console closes the window; a second Ctrl+C kills the process.
     def on_sigint(*_) -> None:
         log.info("Ctrl+C: closing viewer (press again to force quit)")
         signal.signal(signal.SIGINT, signal.SIG_DFL)

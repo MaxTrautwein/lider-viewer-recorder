@@ -7,10 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from ouster.sdk import core, osf
-
-from staticmodel import StaticFilter, clear_pixels
 
 from .receiver import UdpReceiver
 
@@ -47,7 +44,6 @@ class RecordResult:
     incomplete_frames: int
     seconds: float
     interrupted: bool
-    static_fraction: float | None = None  # share of the points dropped as static
 
     @property
     def size_bytes(self) -> int:
@@ -59,14 +55,11 @@ def record(
     n_frames: int,
     path: str | Path,
     no_data_timeout_s: float = 5.0,
-    static: StaticFilter | None = None,
 ) -> RecordResult:
     """Write the next ``n_frames`` complete revolutions to ``path`` (OSF).
 
     The file is written as ``<path>.part`` and renamed when done, so a file with
     the final name is always complete. Ctrl+C stops early and keeps what was recorded.
-    With ``static``, the points it discards (background of this sensor) are stored
-    as "no return".
     """
     if n_frames < 1:
         raise ValueError("n_frames must be >= 1")
@@ -77,19 +70,12 @@ def record(
     writer = osf.Writer(str(part), receiver.info)
     written = incomplete = 0
     first_ts = last_ts = 0
-    points = dropped = 0
     interrupted = False
     try:
         for lidar_frame in receiver.frames(no_data_timeout_s):
             complete = lidar_frame.complete()
             if written == 0 and not complete:
                 continue  # recording started mid-revolution
-            if static is not None:
-                mask = static.discard_mask(lidar_frame)
-                has_point = lidar_frame.field("RANGE") > 0
-                points += int(np.count_nonzero(has_point))
-                dropped += int(np.count_nonzero(mask & has_point))
-                clear_pixels(lidar_frame, mask)
             writer.save(0, lidar_frame)
             ts = int(lidar_frame.timestamp[lidar_frame.get_first_valid_column()])
             first_ts = first_ts or ts
@@ -116,5 +102,4 @@ def record(
         incomplete_frames=incomplete,
         seconds=(last_ts - first_ts) / 1e9 + period,
         interrupted=interrupted,
-        static_fraction=dropped / max(points, 1) if static is not None else None,
     )
