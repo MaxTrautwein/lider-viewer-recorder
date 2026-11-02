@@ -148,13 +148,21 @@ remembered (`~/.config/lidar/viewer.ini`) and reopened when the viewer starts wi
 | slider | jump to a frame |
 | speed, Loop | playback speed 0.25×–4×, loop at the end |
 | mouse | left-drag rotates, wheel zooms, middle-drag or Ctrl+left-drag pans |
-| Color / Map | channel field and colormap (scaled to the 1st–99th percentile of the whole frame, so Azimuth and Max range do not change the colors) |
+| Color / Map, Reverse | channel field and colormap, optionally flipped (remembered) |
+| Scale, Clip | color scaling (remembered): `linear`, `sqrt` or `log` values, from the 1st percentile up to the Clip percentile (default 99 %) of the whole frame, so Azimuth and Max range do not change the colors. Most reflectivity / signal values are small: `log` or a lower Clip (e.g. 95 %) brighten the image |
 | Max range | hide points farther away (helps indoors) |
 | Azimuth, Full | simulate the sensor's `azimuth_window` [start, end] in millidegrees (0…360000, start > end wraps through 0): points outside are hidden, so the two values can go straight into the sensor config. Full resets to 0…360000 |
 | Edit › Copy frame timestamp (Ctrl+Shift+C), Copy | frame time in the configured `timezone` as a Postgres `timestamptz`, e.g. `2026-10-21 14:20:42.800342+00:00` |
 | File › Save frame as PLY (Ctrl+S) | current frame as `.ply` (xyz + all fields) for CloudCompare/MeshLab |
 | File › Export frame as PNG (Ctrl+E) | current frame as `<name>_2d.png` (the 2D image at the sensor's resolution, e.g. 1024 × 128, however far it is zoomed; transparent outside the azimuth window) and / or `<name>_3d.png` (the 3D view as shown, with or without the grid) |
 | View › Show grid | show or hide the ground grid of the 3D view (remembered) |
+| View › White background | white instead of black behind the 3D view and the 2D image, also in the exported 3D PNG (remembered) |
+
+For slides with a white background, use Scale `log` (or Clip around 95 %) so the image is not mostly
+the darkest color. With View › White background, use a colormap that is dark at low values but not
+near white at its top end, e.g. `viridis` or `cividis`. Alternatively, use `CET-L1` with Reverse:
+gray points on white, brightest reflectors black. The 2D PNG is transparent only outside the azimuth
+window; pixels without a return get the lowest color.
 
 ## Development
 

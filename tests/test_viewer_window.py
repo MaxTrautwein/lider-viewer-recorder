@@ -3,6 +3,7 @@
 import os
 from datetime import UTC
 
+import numpy as np
 import pytest
 from fake_sensor import load_info, room_frame
 from ouster.sdk import osf
@@ -109,4 +110,79 @@ def test_azimuth_wraps(app):
     end.setValue(359_000)
     end.stepBy(1)
     assert end.value() == 360_000
+    win.close()
+
+
+def test_levels_clip_and_transform():
+    values = np.arange(101, dtype=np.float32)
+    assert window._levels(values) == pytest.approx((1, 99))
+    assert window._levels(values, 90) == pytest.approx((1, 90))
+    np.testing.assert_allclose(window._transform(values, "linear"), values)
+    np.testing.assert_allclose(window._transform(values, "sqrt"), np.sqrt(values))
+    np.testing.assert_allclose(window._transform(values, "log"), np.log1p(values))
+    assert window._transform(np.array([-5.0]), "log")[0] == 0
+    lo, hi = window._levels(np.full(10, 0.5, np.float32))
+    assert hi > lo  # constant input still gives a usable span
+
+
+def test_reversed_colormap_leaves_cached_map_alone():
+    original = window.pg.colormap.get("magma")
+    before = original.map([0.0, 0.3, 1.0], mode="byte").copy()
+    flipped = window._reversed(original)
+    np.testing.assert_array_equal(flipped.map([1.0, 0.7, 0.0], mode="byte"), before)
+    np.testing.assert_array_equal(
+        window.pg.colormap.get("magma").map([0.0, 0.3, 1.0], mode="byte"), before
+    )
+    np.testing.assert_array_equal(
+        window._reversed(flipped).map([0.0, 0.3, 1.0], mode="byte"), before
+    )
+
+
+def test_white_background_and_color_settings_remembered(app):
+    win = window.ViewerWindow(Config(UTC, None))
+    assert not win.white_action.isChecked()
+    win.white_action.setChecked(True)
+    assert win.view3d.opts["bgcolor"] == (1.0, 1.0, 1.0, 1.0)
+    win.cmap_box.setCurrentText("viridis")
+    win.reverse_box.setChecked(True)
+    win.scale_box.setCurrentText("log")
+    win.clip_box.setValue(95)
+    win.close()
+
+    win = window.ViewerWindow(Config(UTC, None))
+    assert win.white_action.isChecked()
+    assert win.view3d.opts["bgcolor"] == (1.0, 1.0, 1.0, 1.0)
+    assert win.cmap_box.currentText() == "viridis"
+    assert win.reverse_box.isChecked()
+    assert win.scale_box.currentText() == "log"
+    assert win.clip_box.value() == 95
+    win.close()
+
+
+def test_export_log_scale_is_brighter(app, recording, tmp_path, monkeypatch):
+    monkeypatch.setattr(window, "_ask_export", lambda parent, grid: (True, False, False))
+    win = window.ViewerWindow(Config(UTC, None))
+    win.open(recording)
+    win.field_box.setCurrentText("RANGE")  # continuous (the fake reflectivity is two-valued)
+    win.cmap_box.setCurrentText("CET-L1")  # grayscale: brightness = value
+
+    def export(scale: str) -> float:
+        win.scale_box.setCurrentText(scale)
+        name = tmp_path / f"{scale}.png"
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog, "getSaveFileName", lambda *a, **k: (str(name), "")
+        )
+        win._on_export()
+        image = QtGui.QImage(str(tmp_path / f"{scale}_2d.png"))
+        return float(
+            np.mean(
+                [
+                    QtGui.QColor(image.pixel(x, y)).value()
+                    for x in range(0, image.width(), 4)
+                    for y in range(image.height())
+                ]
+            )
+        )
+
+    assert export("log") > export("linear")
     win.close()

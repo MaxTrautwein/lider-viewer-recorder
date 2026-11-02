@@ -21,7 +21,9 @@ from .frame import (
 )
 from .recording import Recording
 
-COLORMAPS = ("turbo", "viridis", "magma", "CET-L1")
+COLORMAPS = ("turbo", "viridis", "magma", "inferno", "plasma", "cividis", "CET-L1")
+SCALES = ("linear", "sqrt", "log")
+DEFAULT_CLIP = 99.0  # upper percentile of the color scaling
 SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0)
 FULL_AZIMUTH = (0, 360_000)  # sensor azimuth_window range, millidegrees
 FILE_FILTER = "Ouster recordings (*.osf)"
@@ -88,7 +90,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.grid = gl.GLGridItem()
         self.grid.setSize(40, 40)
         self.grid.setSpacing(1, 1)
-        self.grid.setColor((255, 255, 255, 40))
         self.view3d.addItem(self.grid)
         self.view3d.addItem(gl.GLAxisItem(size=QtGui.QVector3D(1, 1, 1)))
         self.scatter = gl.GLScatterPlotItem(pxMode=True)
@@ -176,6 +177,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.grid_action.setChecked(self.settings.value("show_grid", True, type=bool))
         self.grid_action.toggled.connect(self._on_grid_toggled)
         self.grid.setVisible(self.grid_action.isChecked())
+        self.white_action = view_menu.addAction("&White background")
+        self.white_action.setCheckable(True)
+        self.white_action.setChecked(self.settings.value("white_background", False, type=bool))
+        self.white_action.toggled.connect(self._on_white_toggled)
+        self._apply_background(self.white_action.isChecked())
 
     def _build_display_toolbar(self) -> None:
         tb = self.addToolBar("Display")
@@ -188,11 +194,47 @@ class ViewerWindow(QtWidgets.QMainWindow):
         tb.addWidget(QtWidgets.QLabel(" Color: "))
         tb.addWidget(self.field_box)
 
+        # Color scaling; remembered, so a look chosen for slides survives restarts.
+        s = self.settings
         self.cmap_box = QtWidgets.QComboBox()
         self.cmap_box.addItems(COLORMAPS)
-        self.cmap_box.currentTextChanged.connect(self._redraw)
+        self.cmap_box.setCurrentText(s.value("colormap", COLORMAPS[0]))
         tb.addWidget(QtWidgets.QLabel(" Map: "))
         tb.addWidget(self.cmap_box)
+
+        self.reverse_box = QtWidgets.QCheckBox(
+            "Reverse", checked=s.value("reverse", False, type=bool), toolTip="Flip the colormap"
+        )
+        tb.addWidget(self.reverse_box)
+
+        self.scale_box = QtWidgets.QComboBox(
+            toolTip="sqrt / log spread the many low values (e.g. reflectivity) over more colors"
+        )
+        self.scale_box.addItems(SCALES)
+        self.scale_box.setCurrentText(s.value("scale", SCALES[0]))
+        tb.addWidget(QtWidgets.QLabel(" Scale: "))
+        tb.addWidget(self.scale_box)
+
+        self.clip_box = QtWidgets.QDoubleSpinBox(
+            minimum=50,
+            maximum=100,
+            singleStep=0.5,
+            decimals=1,
+            suffix=" %",
+            value=s.value("clip", DEFAULT_CLIP, type=float),
+            toolTip="Upper percentile of the frame's values that gets the top color; "
+            "lower it to brighten the image",
+        )
+        tb.addWidget(QtWidgets.QLabel(" Clip: "))
+        tb.addWidget(self.clip_box)
+
+        for key, changed in (
+            ("colormap", self.cmap_box.currentTextChanged),
+            ("reverse", self.reverse_box.toggled),
+            ("scale", self.scale_box.currentTextChanged),
+            ("clip", self.clip_box.valueChanged),
+        ):
+            changed.connect(lambda value, key=key: self._on_color_setting(key, value))
 
         self.size_box = QtWidgets.QDoubleSpinBox(minimum=0.5, maximum=10, singleStep=0.5, value=2)
         self.size_box.valueChanged.connect(self._redraw)
@@ -297,6 +339,21 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _on_azimuth_changed(self) -> None:
         self._redraw()
         self._update_status()
+
+    def _on_color_setting(self, key: str, value) -> None:
+        self.settings.setValue(key, value)
+        self._redraw()
+
+    def _on_white_toggled(self, checked: bool) -> None:
+        self._apply_background(checked)
+        self.settings.setValue("white_background", checked)
+
+    def _apply_background(self, white: bool) -> None:
+        """Black or white background of the 3D view and the 2D image (white suits slides)."""
+        color = "w" if white else "k"
+        self.view3d.setBackgroundColor(color)
+        self.image_widget.setBackground(color)
+        self.grid.setColor((0, 0, 0, 60) if white else (255, 255, 255, 40))
 
     def _on_grid_toggled(self, checked: bool) -> None:
         self.grid.setVisible(checked)
@@ -430,11 +487,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.image_item.setColorMap(cmap)
 
     def _field_values(self) -> np.ndarray:
-        """The selected field of the current frame (staggered, float)."""
+        """The selected field of the current frame (staggered, float) on the selected scale."""
         name = self.field_box.currentText()
         if name not in self.frame.fields:
             name = "RANGE"
-        return self.frame.fields[name].astype(np.float32)
+        values = self.frame.fields[name].astype(np.float32)
+        return _transform(values, self.scale_box.currentText())
 
     def _in_window(self) -> np.ndarray:
         """Staggered mask of the pixels inside the azimuth window."""
@@ -452,9 +510,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         azimuth window, with its color levels and colormap. The levels are scaled over the
         whole frame, so azimuth and max range hide points but do not change the colors of
         the others (also in 3D)."""
-        levels = _levels(values[self.frame.range > 0])
+        levels = _levels(values[self.frame.range > 0], self.clip_box.value())
         image = destagger(self.recording.info, np.where(self._in_window(), values, np.nan))
-        return image, levels, pg.colormap.get(self.cmap_box.currentText())
+        return image, levels, self._colormap()
+
+    def _colormap(self) -> pg.ColorMap:
+        cmap = pg.colormap.get(self.cmap_box.currentText())
+        return _reversed(cmap) if self.reverse_box.isChecked() else cmap
 
     def _grab_3d(self, include_grid: bool) -> QtGui.QImage:
         """The 3D view as shown (at the widget's size), with or without the grid."""
@@ -643,12 +705,28 @@ def _rgba_image(image: np.ndarray, levels: tuple[float, float], cmap: pg.ColorMa
     return QtGui.QImage(rgba.data, w, h, 4 * w, QtGui.QImage.Format_RGBA8888).copy()
 
 
-def _levels(values: np.ndarray) -> tuple[float, float]:
-    """Robust color scaling: 1st to 99th percentile of the valid values."""
+def _levels(values: np.ndarray, upper: float = DEFAULT_CLIP) -> tuple[float, float]:
+    """Robust color scaling: 1st to ``upper`` percentile of the valid values."""
     if values.size == 0:
         return 0.0, 1.0
-    lo, hi = np.percentile(values, (1, 99))
-    return float(lo), float(max(hi, lo + 1))
+    lo, hi = np.percentile(values, (1, upper))
+    # sqrt / log values are small: keep the minimum span relative to their size.
+    return float(lo), float(max(hi, lo + 1e-3 * max(abs(lo), 1)))
+
+
+def _transform(values: np.ndarray, scale: str) -> np.ndarray:
+    """``values`` on the color scale: linear, sqrt or log (log1p, so 0 stays 0)."""
+    if scale == "sqrt":
+        return np.sqrt(np.maximum(values, 0))
+    if scale == "log":
+        return np.log1p(np.maximum(values, 0))
+    return values
+
+
+def _reversed(cmap: pg.ColorMap) -> pg.ColorMap:
+    """A flipped copy; pg.colormap.get returns shared cached maps, so never flip those."""
+    colors = cmap.getColors(mode="byte")[::-1]
+    return pg.ColorMap(1.0 - cmap.pos[::-1], colors, name=f"{cmap.name}_r")
 
 
 def run(path: str | None, cfg: Config) -> int:
